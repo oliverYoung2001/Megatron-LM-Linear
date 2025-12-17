@@ -2285,6 +2285,8 @@ def train(
         and torch.distributed.get_rank() in args.profile_ranks
         and args.use_pytorch_profiler
     ):
+        # [NOTE]: Modified by yhy
+        TRACE_NAME = f'{os.environ["TRACE_NAME"]}_w{torch.distributed.get_world_size()}_r{torch.distributed.get_rank()}'
         prof = torch.profiler.profile(
             schedule=torch.profiler.schedule(
                 wait=max(args.profile_step_start - 1, 0),
@@ -2292,7 +2294,10 @@ def train(
                 active=args.profile_step_end - args.profile_step_start,
                 repeat=1,
             ),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(args.tensorboard_dir),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                dir_name=f'{args.tensorboard_dir}', 
+                worker_name=TRACE_NAME,
+            ),
             record_shapes=True,
             with_stack=True,
         )

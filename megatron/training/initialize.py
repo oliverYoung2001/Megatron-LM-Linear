@@ -325,7 +325,11 @@ def _initialize_distributed(get_embedding_ranks, get_position_embedding_ranks, s
         args.world_size = torch.distributed.get_world_size()
 
     else:
-
+        # Ranks from Slurm. [NOTE]: Modified by yhy
+        if os.environ.get('SLURM_PROCID') is not None:
+            args.rank = int(os.environ['SLURM_PROCID'])
+            args.local_rank = int(os.environ['SLURM_LOCALID'])
+        # End
         if args.rank == 0:
             print("> initializing torch distributed ...", flush=True)
         # Manually set the device ids.

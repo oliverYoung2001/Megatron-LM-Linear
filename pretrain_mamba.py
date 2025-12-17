@@ -179,7 +179,28 @@ def train_valid_test_datasets_provider(train_val_test_num_samples, vp_stage=None
         train_val_test_num_samples : A list containing the number of samples in train test and validation.
     """
     args = get_args()
-    config = core_gpt_dataset_config_from_args(args)
+    # [NOTE]: Modified by yhy
+    # config = core_gpt_dataset_config_from_args(args)
+    tokenizer = build_tokenizer(args)
+    config = GPTDatasetConfig(
+        random_seed=args.seed,
+        sequence_length=args.seq_length,
+        # blend=blend,
+        # blend_per_split=blend_per_split,
+        split=args.split,
+        num_dataset_builder_threads=args.num_dataset_builder_threads,
+        path_to_cache=args.data_cache_path,
+        mmap_bin_files=args.mmap_bin_files,
+        tokenizer=tokenizer,
+        reset_position_ids=args.reset_position_ids, # False
+        reset_attention_mask=args.reset_attention_mask, # False
+        eod_mask_loss=args.eod_mask_loss,   # False
+        create_attention_mask=args.create_attention_mask_in_dataloader,
+        object_storage_cache_path=args.object_storage_cache_path,
+        mid_level_dataset_surplus=args.mid_level_dataset_surplus,
+        allow_ambiguous_pad_tokens=args.allow_ambiguous_pad_tokens,
+    )
+    # End
 
     if args.sft:
         dataset_type = SFTDataset
