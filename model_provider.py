@@ -38,7 +38,7 @@ def model_provider(
     """
     args = get_args()
 
-    if args.record_memory_history:
+    if args.record_memory_history:  # False
         torch.cuda.memory._record_memory_history(
             True,
             # keep 100,000 alloc/free events from before the snapshot
@@ -60,7 +60,7 @@ def model_provider(
 
         torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
-    if has_nvidia_modelopt and getattr(args, 'modelopt_enabled', False):
+    if has_nvidia_modelopt and getattr(args, 'modelopt_enabled', False):    # False, 
         # [ModelOpt]: Use custom builder + spec when modelopt is enabled
         model_builder = modelopt_gpt_mamba_builder
 

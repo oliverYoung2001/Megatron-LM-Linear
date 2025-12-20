@@ -911,6 +911,8 @@ def initialize_model_parallel(
     global _CONTEXT_PARALLEL_GLOBAL_RANKS
     assert _CONTEXT_PARALLEL_GROUP is None, 'context parallel group is already initialized'
     for ranks in decoder_rank_generator.get_ranks('cp'):
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] cp_ranks: {ranks}', flush=True)
         group = create_group(
             ranks,
             timeout=timeout,
@@ -920,7 +922,7 @@ def initialize_model_parallel(
         if rank in ranks:
             _CONTEXT_PARALLEL_GROUP = group
             _CONTEXT_PARALLEL_GLOBAL_RANKS = ranks
-        if hierarchical_context_parallel_sizes:
+        if hierarchical_context_parallel_sizes: # False
             assert np.prod(hierarchical_context_parallel_sizes) == context_parallel_size
             global _HIERARCHICAL_CONTEXT_PARALLEL_GROUPS
             hierarchical_groups, _ = create_hierarchical_groups(

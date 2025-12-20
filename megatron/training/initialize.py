@@ -39,7 +39,7 @@ def initialize_megatron(
     extra_args_provider=None,
     args_defaults={},
     ignore_unknown_args=False,
-    allow_no_cuda=False,
+    allow_no_cuda=False,    # False
     skip_mpu_initialization=False,
     get_embedding_ranks=None,
     get_position_embedding_ranks=None,
@@ -54,23 +54,23 @@ def initialize_megatron(
     Returns a function to finalize distributed env initialization
     (optionally, only when args.lazy_mpu_init == True)
     """
-    if not allow_no_cuda:
+    if not allow_no_cuda:   # True
         # Make sure cuda is available.
         assert torch.cuda.is_available(), "Megatron requires CUDA."
 
     # Parse arguments
-    if parsed_args is None:
+    if parsed_args is None: # None
         args = parse_args(extra_args_provider, ignore_unknown_args)
     else:
         args = parsed_args
 
     # Prep for checkpoint conversion.
-    if args.ckpt_convert_format is not None:
+    if args.ckpt_convert_format is not None:    # None
         assert args.ckpt_convert_save is not None
         assert args.load is not None
         args.exit_on_missing_checkpoint = True
 
-    if args.use_checkpoint_args or args_defaults.get("use_checkpoint_args", False):
+    if args.use_checkpoint_args or args_defaults.get("use_checkpoint_args", False): # False, ?
         assert args.load is not None or args.pretrained_checkpoint is not None, "--use-checkpoint-args requires --load or --pretrained-checkpoint argument"
         assert args.non_persistent_ckpt_type != "local", (
             "--use-checkpoint-args is not supported with --non_persistent_ckpt_type=local. "
@@ -80,10 +80,10 @@ def initialize_megatron(
         load_args_from_checkpoint(args, load_arg='pretrained_checkpoint')
         load_args_from_checkpoint(args)
 
-    if args.async_save and args.use_persistent_ckpt_worker:
+    if args.async_save and args.use_persistent_ckpt_worker: # None, 
         init_persistent_async_worker()
 
-    if args.yaml_cfg is not None:
+    if args.yaml_cfg is not None:   # None
         args = validate_yaml(args, args_defaults)
     else:
         validate_args(args, args_defaults)
@@ -133,7 +133,7 @@ def initialize_megatron(
         )
 
         # Setup MoE aux loss scale value.
-        if args.num_experts is not None:
+        if args.num_experts is not None:    # None
             from megatron.core.transformer.moe.router import MoEAuxLossAutoScaler
 
             MoEAuxLossAutoScaler.set_loss_scale(torch.ones(1, device=torch.cuda.current_device()))
@@ -142,7 +142,7 @@ def initialize_megatron(
         return None
 
     args = get_args()
-    if args.lazy_mpu_init:
+    if args.lazy_mpu_init:  # None
         # TODO is this still a necessary option?
         args.use_cpu_initialization = True
         # delayed initialization of DDP-related stuff
@@ -314,7 +314,7 @@ def _initialize_distributed(get_embedding_ranks, get_position_embedding_ranks, s
     args = get_args()
 
     device_count = torch.cuda.device_count()
-    if torch.distributed.is_initialized():
+    if torch.distributed.is_initialized():  # False
 
         if args.rank == 0:
             print(
@@ -351,7 +351,7 @@ def _initialize_distributed(get_embedding_ranks, get_position_embedding_ranks, s
             'rank': args.rank,
             'timeout': timedelta(minutes=args.distributed_timeout_minutes),
         }
-        if args.fake_process_group:
+        if args.fake_process_group: # False
             assert is_torch_min_version("2.3.0"), "Fake process group is only supported with PyTorch 2.3.0 and above."
             from torch.testing._internal.distributed.fake_pg import FakeStore
             store = FakeStore()
@@ -374,7 +374,7 @@ def _initialize_distributed(get_embedding_ranks, get_position_embedding_ranks, s
                 pipeline_model_parallel_comm_backend=args.pipeline_model_parallel_comm_backend,
                 use_sharp=args.use_sharp,
                 context_parallel_size=args.context_parallel_size,
-                hierarchical_context_parallel_sizes=args.hierarchical_context_parallel_sizes,
+                hierarchical_context_parallel_sizes=args.hierarchical_context_parallel_sizes,   # None
                 expert_model_parallel_size=args.expert_model_parallel_size,
                 num_distributed_optimizer_instances=args.num_distributed_optimizer_instances,
                 expert_tensor_parallel_size=args.expert_tensor_parallel_size,

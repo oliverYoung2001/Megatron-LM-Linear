@@ -907,7 +907,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     """Build the model."""
     args = get_args()
     args.model_type = model_type
-    if pg_collection is None:
+    if pg_collection is None:   # True
         pg_collection = ProcessGroupCollection.use_mpu_process_groups()
 
     if has_nvidia_modelopt:

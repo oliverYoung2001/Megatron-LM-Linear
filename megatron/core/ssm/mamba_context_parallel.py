@@ -168,8 +168,13 @@ class MambaContextParallel:
 
         # [l_global//cp, b, nheads] -> [l_global, b, nheads//cp]
         dt = _all_to_all_cp2hp(dt, self.cp_group)
-
-        output = torch.cat([z, x, B, C, dt], dim=-1)
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] z after a2a: {z.shape}', flush=True)    # [S, B, (Hv/CP)*(Dv=64)], [131072, 1, 4096]
+        #     print(f'[DEBUG] x after a2a: {x.shape}', flush=True)    # [S, B, (Hv/CP)*Dv], [131072, 1, 4096]
+        #     print(f'[DEBUG] B after a2a: {B.shape}', flush=True)    # [S, B, (Hqk/CP)*(Dk=128)], [131072, 1, 512]
+        #     print(f'[DEBUG] C after a2a: {C.shape}', flush=True)    # [S, B, (Hqk/CP)*(Dk=128)], [131072, 1, 512]
+        #     print(f'[DEBUG] dt after a2a: {dt.shape}', flush=True)  # [S, B, Hv/CP], [131072, 1, 64]
+        output = torch.cat([z, x, B, C, dt], dim=-1)    # z, x(V), B(K), C(Q), dt
         # TODO(duncan): for hybrid models, consider isolating load-balancing to attention layers
         output = _undo_attention_load_balancing(output, self.cp_size)
 

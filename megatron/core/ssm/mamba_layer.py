@@ -118,7 +118,7 @@ class MambaLayer(GraphableMegatronModule):
         inference_context = deprecate_inference_params(inference_context, inference_params)
 
         residual = hidden_states
-        if self.residual_in_fp32:
+        if self.residual_in_fp32:   # False
             residual = residual.to(torch.float32)
 
         hidden_states = hidden_states.to(dtype=self.config.params_dtype)

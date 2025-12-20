@@ -144,8 +144,8 @@ class MambaMixer(MegatronModule):
         conv_init=None,
         expand=2,
         A_init_range=(1, 16),
-        D_has_hdim=False,
-        rmsnorm=True,
+        D_has_hdim=False,   # False
+        rmsnorm=True,   # True
         norm_before_gate=False,
         dt_min=0.001,
         dt_max=0.1,
@@ -155,7 +155,7 @@ class MambaMixer(MegatronModule):
         bias=False,
         conv_bias=True,
         # Fused kernel and sharding options
-        chunk_size=128,
+        chunk_size=128, # 128
         layer_number=None,
         use_mem_eff_path=None,
         d_state=None,
@@ -216,15 +216,15 @@ class MambaMixer(MegatronModule):
             )
 
         self.use_mem_eff_path = self.config.use_mamba_mem_eff_path
-        self.d_state = self.config.mamba_state_dim
-        self.headdim = self.config.mamba_head_dim
+        self.d_state = self.config.mamba_state_dim  # Dk=128
+        self.headdim = self.config.mamba_head_dim   # Dv=64
         self.ngroups = self.config.mamba_num_groups
 
         assert self.d_state is not None and self.d_state > 0
         assert self.headdim is not None and self.headdim > 0
         assert self.ngroups is not None and self.ngroups > 0
 
-        if self.config.mamba_num_heads is not None:
+        if self.config.mamba_num_heads is not None: # None
             self.nheads = self.config.mamba_num_heads
             assert self.nheads > 0
             self.d_inner = self.nheads * self.headdim
@@ -273,7 +273,7 @@ class MambaMixer(MegatronModule):
             tp_group=self.pg_collection.tp,
         )
 
-        if not self.use_mem_eff_path:
+        if not self.use_mem_eff_path:   # False
             log_single_rank(
                 logger,
                 logging.WARNING,
@@ -344,7 +344,7 @@ class MambaMixer(MegatronModule):
         )  # Keep in fp32
         setattr(self.D, "tensor_model_parallel", True)
 
-        if self.rmsnorm:
+        if self.rmsnorm:    # True
             assert RMSNormGated is not None
             self.norm = ExtendedRMSNorm(
                 self.d_inner_local_tp,
@@ -377,6 +377,8 @@ class MambaMixer(MegatronModule):
         # having indepdendent trainable variables. All context parallel ranks in a tensor parallel
         # rank store the same trainable variables, but only use and update their unique/independent
         # slice of them.
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] self.pg_collection.cp: {torch.distributed.get_process_group_ranks(group=self.pg_collection.cp)}', flush=True)
         self.cp = MambaContextParallel(
             cp_group=self.pg_collection.cp,
             d_inner_local_tp=self.d_inner_local_tp,
@@ -385,9 +387,9 @@ class MambaMixer(MegatronModule):
             d_state=self.d_state,
             conv1d_cp1=self.conv1d,
             dt_bias_cp1=self.dt_bias,
-            A_log_cp1=self.A_log,
+            A_log_cp1=self.A_log,   # [Hv/TP]
             D_cp1=self.D,
-            D_has_hdim=self.D_has_hdim,
+            D_has_hdim=self.D_has_hdim, # False
         )
         self.tp_group = pg_collection.tp
 
@@ -410,7 +412,7 @@ class MambaMixer(MegatronModule):
         _, batch, dim = hidden_states.shape
         conv_state, ssm_state = None, None
 
-        if in_inference_mode:
+        if in_inference_mode:   # False
             if inference_context.is_dynamic_batching():
                 return self.dynamic_inference(hidden_states, inference_context)
             else:
@@ -423,10 +425,13 @@ class MambaMixer(MegatronModule):
                     return out, out_bias
 
         zxBCdt, _ = self.in_proj(hidden_states)
-
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] hidden_states: {hidden_states.shape}', flush=True)  # [S/CP, B, H], [65536, 1, 4096]
+        #     print(f'[DEBUG] zxBCdt: {zxBCdt.shape}', flush=True)    # [S/CP, B, 2*hv*dv+2*hqk*dk+hv], [65536, 1, 18560]
         zxBCdt = self.cp.pre_conv_ssm(zxBCdt)
-
-        if in_inference_mode or not self.use_mem_eff_path:
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] zxBCdt_2: {zxBCdt.shape}', flush=True)  # [S, B, 2*(hv/CP)*dv+2*(hqk/CP)*dk+hv/CP], [131072, 1, 9280]
+        if in_inference_mode or not self.use_mem_eff_path:  # False, False
             # TODO(ksanthanam): Consider deprecating this path for training
             y = self.ssm_prefill(zxBCdt, conv_state=conv_state, ssm_state=ssm_state)
         else:
@@ -601,7 +606,8 @@ class MambaMixer(MegatronModule):
 
         # (nheads_local_tpcp)
         A = -torch.exp(self.cp.get_A_log().float())
-
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] A: {A.shape}', flush=True)  # [Hv/CP], [64]
         # TODO(duncan): Can this code be removed?
         if self.conv1d.bias is not None:
             self.conv1d.bias.data_ptr()
@@ -617,17 +623,19 @@ class MambaMixer(MegatronModule):
                 if self.D_has_hdim
                 else self.cp.get_D()
             ),
-            chunk_size=self.chunk_size,
+            chunk_size=self.chunk_size, # 128
             activation=self.activation,
-            headdim=None if self.D_has_hdim else self.headdim,
-            ngroups=self.cp.ngroups_local_tpcp,
+            headdim=None if self.D_has_hdim else self.headdim,  # False, 64
+            ngroups=self.cp.ngroups_local_tpcp, # max(1, Hqk/TP/CP)
             norm_before_gate=self.norm_before_gate,
         )
-
-        y = rearrange(y, "b l d -> l b d").contiguous()
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] y: {y.shape}', flush=True)  # [B, S, (Hv/TP/CP)*Dv], [1, 131072, 4096]
+        y = rearrange(y, "b l d -> l b d").contiguous() # [S, B, (Hv/TP/CP)*Dv]
         y = self.cp.post_conv_ssm(y)
-
-        if self.rmsnorm:
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'[DEBUG] y2: {y.shape}', flush=True)  # [S/CP, B, (Hv/TP)*Dv], [65536, 1, 8192]
+        if self.rmsnorm:    # True
             y = self.norm(y)
 
         return y
