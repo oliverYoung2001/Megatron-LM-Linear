@@ -24,6 +24,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Global gloo group
+_GLOBAL_GROUP_GLOO = None
 # Intra-layer model parallel group that the current rank belongs to.
 _TENSOR_MODEL_PARALLEL_GROUP = None
 # Inter-layer model parallel group that the current rank belongs to.
@@ -698,6 +700,10 @@ def initialize_model_parallel(
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
+    # [NOTE]: Modified by yhy
+    global _GLOBAL_GROUP_GLOO
+    _GLOBAL_GROUP_GLOO = torch.distributed.new_group(ranks=list(range(world_size)), backend='gloo')
+    # End
 
     model_size = tensor_model_parallel_size * pipeline_model_parallel_size * context_parallel_size
 
@@ -1322,6 +1328,12 @@ def model_parallel_is_initialized():
     return True
 
 
+def get_global_group_gloo(check_initialized=True):
+    """Get the global gloo group."""
+    if check_initialized:
+        assert _GLOBAL_GROUP_GLOO is not None, "global gloo group is not initialized"
+    return _GLOBAL_GROUP_GLOO
+    
 def get_model_parallel_group(check_initialized=True):
     """Get the model-parallel group the caller rank belongs to."""
     if check_initialized:

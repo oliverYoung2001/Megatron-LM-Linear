@@ -70,6 +70,7 @@ try:
     HAVE_EINOPS = True
 except ImportError:
     HAVE_EINOPS = False
+from megatron.training import get_args, print_rank_0
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ class MambaMixer(MegatronModule):
         self,
         config: TransformerConfig,
         submodules: MambaMixerSubmodules,
-        d_model,
+        d_model,    # hidden_size=4096
         d_conv=4,
         conv_init=None,
         expand=2,
@@ -155,7 +156,8 @@ class MambaMixer(MegatronModule):
         bias=False,
         conv_bias=True,
         # Fused kernel and sharding options
-        chunk_size=128, # 128
+        # chunk_size=128,
+        chunk_size=256, # align with Mamba-Codestral-7B-v0.1
         layer_number=None,
         use_mem_eff_path=None,
         d_state=None,
@@ -299,7 +301,7 @@ class MambaMixer(MegatronModule):
             )
             setattr(self.conv1d.weight, "tensor_model_parallel", True)
             setattr(self.conv1d.bias, "tensor_model_parallel", True)
-            if self.config.perform_initialization:
+            if self.config.perform_initialization:  # True
                 if self.conv_init is not None:
                     nn.init.uniform_(self.conv1d.weight, -self.conv_init, self.conv_init)
                 else:
@@ -379,19 +381,31 @@ class MambaMixer(MegatronModule):
         # slice of them.
         # if torch.distributed.get_rank() == 0:
         #     print(f'[DEBUG] self.pg_collection.cp: {torch.distributed.get_process_group_ranks(group=self.pg_collection.cp)}', flush=True)
-        self.cp = MambaContextParallel(
-            cp_group=self.pg_collection.cp,
-            d_inner_local_tp=self.d_inner_local_tp,
-            nheads_local_tp=self.nheads_local_tp,
-            ngroups_local_tp=self.ngroups_local_tp,
-            d_state=self.d_state,
-            conv1d_cp1=self.conv1d,
-            dt_bias_cp1=self.dt_bias,
-            A_log_cp1=self.A_log,   # [Hv/TP]
-            D_cp1=self.D,
-            D_has_hdim=self.D_has_hdim, # False
-        )
-        self.tp_group = pg_collection.tp
+        # [NOTE]: Modified by yhy. Real cp
+        args = get_args()
+        if args.context_parallel_type == 'cp':
+            from lacp.utils.chain_comm import Chain_Communicator
+            self.chain_comm_streams = [torch.cuda.Stream(device=torch.cuda.current_device()) for _ in range(2)]
+            cp_ranks = torch.distributed.get_process_group_ranks(group=self.pg_collection.cp)
+            self.chain_comm = Chain_Communicator(rank, cp_ranks, None, parallel_state.get_global_group_gloo(), self.chain_comm_streams)
+
+        elif args.context_parallel_type == 'hp':
+            self.cp = MambaContextParallel(
+                cp_group=self.pg_collection.cp,
+                d_inner_local_tp=self.d_inner_local_tp,
+                nheads_local_tp=self.nheads_local_tp,
+                ngroups_local_tp=self.ngroups_local_tp,
+                d_state=self.d_state,
+                conv1d_cp1=self.conv1d,
+                dt_bias_cp1=self.dt_bias,
+                A_log_cp1=self.A_log,   # [Hv/TP]
+                D_cp1=self.D,
+                D_has_hdim=self.D_has_hdim, # False
+            )
+            self.tp_group = pg_collection.tp
+        else:
+            raise ValueError(f"Unknown context parallel type: {config.context_parallel_type}")
+        # End
 
     def forward(
         self,
@@ -428,15 +442,40 @@ class MambaMixer(MegatronModule):
         # if torch.distributed.get_rank() == 0:
         #     print(f'[DEBUG] hidden_states: {hidden_states.shape}', flush=True)  # [S/CP, B, H], [65536, 1, 4096]
         #     print(f'[DEBUG] zxBCdt: {zxBCdt.shape}', flush=True)    # [S/CP, B, 2*hv*dv+2*hqk*dk+hv], [65536, 1, 18560]
-        zxBCdt = self.cp.pre_conv_ssm(zxBCdt)
-        # if torch.distributed.get_rank() == 0:
-        #     print(f'[DEBUG] zxBCdt_2: {zxBCdt.shape}', flush=True)  # [S, B, 2*(hv/CP)*dv+2*(hqk/CP)*dk+hv/CP], [131072, 1, 9280]
-        if in_inference_mode or not self.use_mem_eff_path:  # False, False
-            # TODO(ksanthanam): Consider deprecating this path for training
-            y = self.ssm_prefill(zxBCdt, conv_state=conv_state, ssm_state=ssm_state)
+        args = get_args()
+        if args.context_parallel_type == 'cp':
+            from lacp.la_ops.mamba2.ssd_combined_cp import _mamba_chunk_scan_combined_fwd_cp
+            exe_func = partial(_mamba_chunk_scan_combined_fwd_cp,
+                chain_comm=self.chain_comm,
+                hv_stages=self.config.cpp_stages,
+                x=v,    # batch, seqlen, nheads, headdim(dv)
+                dt=dt,  # batch, seqlen, nheads
+                A=A,    # nheads
+                B=k,    # batch, seqlen, ngroups, dstate(dk)
+                C=q,    # batch, seqlen, ngroups, dstate
+                chunk_size=CHUNK_SIZE, 
+                D=None,    # [NOTE]: what is it?
+                z=None,    # [NOTE]: what is it?
+                dt_bias=None, 
+                initial_states=initial_states, 
+                seq_idx=None, 
+                cu_seqlens=None,
+                dt_softplus=False, 
+                # dt_limit=dt_limit # Default
+                time_events=chunk_alg_events,
+            )
+        elif args.context_parallel_type == 'hp':
+            zxBCdt = self.cp.pre_conv_ssm(zxBCdt)
+            # if torch.distributed.get_rank() == 0:
+            #     print(f'[DEBUG] zxBCdt_2: {zxBCdt.shape}', flush=True)  # [S, B, 2*(hv/CP)*dv+2*(hqk/CP)*dk+hv/CP], [131072, 1, 9280]
+            if in_inference_mode or not self.use_mem_eff_path:  # False, False
+                # TODO(ksanthanam): Consider deprecating this path for training
+                y = self.ssm_prefill(zxBCdt, conv_state=conv_state, ssm_state=ssm_state)
+            else:
+                assert ssm_state is None
+                y = self.ssm_training(zxBCdt)
         else:
-            assert ssm_state is None
-            y = self.ssm_training(zxBCdt)
+            raise ValueError(f"Unknown context parallel type: {config.context_parallel_type}")
 
         out, out_bias = self.out_proj(y)
 
@@ -609,25 +648,29 @@ class MambaMixer(MegatronModule):
         # if torch.distributed.get_rank() == 0:
         #     print(f'[DEBUG] A: {A.shape}', flush=True)  # [Hv/CP], [64]
         # TODO(duncan): Can this code be removed?
-        if self.conv1d.bias is not None:
+        if self.conv1d.bias is not None:    # True
             self.conv1d.bias.data_ptr()
-
+        # if torch.distributed.get_rank() == 0:
+        #     print_rank_0(f'self.cp.get_conv1d_weight(): {self.cp.get_conv1d_weight().shape}, {self.cp.get_conv1d_weight().dtype}')  # [5120, 1, 4], bf16
+        #     print(f'self.cp.get_conv1d_bias(): {self.cp.get_conv1d_bias().shape}, {self.cp.get_conv1d_bias().dtype}')   # [5120], bf16
+        #     print(f'self.cp.get_dt_bias().float(): {self.cp.get_dt_bias().float().shape}', flush=True)  # [64], [Hv/TP/HP]
+        # print_rank_0(f'self.D_has_hdim: {self.D_has_hdim}, self.cp.get_D(): {self.cp.get_D().shape}, {self.cp.get_D().dtype}')  # False, [Hv/TP/HP], [64], bf16
         y = mamba_split_conv1d_scan_combined(
             zxBCdt,
-            rearrange(self.cp.get_conv1d_weight(), "d 1 w -> d w"),
+            rearrange(self.cp.get_conv1d_weight(), "d 1 w -> d w"), # [5120, 4]
             self.cp.get_conv1d_bias(),
             self.cp.get_dt_bias().float(),
             A,
             D=(
                 rearrange(self.cp.get_D().float(), "(h p) -> h p", p=self.headdim)
-                if self.D_has_hdim
+                if self.D_has_hdim  # False
                 else self.cp.get_D()
             ),
             chunk_size=self.chunk_size, # 128
-            activation=self.activation,
+            activation=self.activation, # 'silu'
             headdim=None if self.D_has_hdim else self.headdim,  # False, 64
             ngroups=self.cp.ngroups_local_tpcp, # max(1, Hqk/TP/CP)
-            norm_before_gate=self.norm_before_gate,
+            norm_before_gate=self.norm_before_gate, # False
         )
         # if torch.distributed.get_rank() == 0:
         #     print(f'[DEBUG] y: {y.shape}', flush=True)  # [B, S, (Hv/TP/CP)*Dv], [1, 131072, 4096]

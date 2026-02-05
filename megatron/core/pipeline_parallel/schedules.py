@@ -32,6 +32,7 @@ from .combined_1f1b import (
     combined_1f1b_schedule_for_interleaved_pipelining,
     combined_1f1b_schedule_for_no_pipelining,
 )
+# from megatron.training.utils import print_rank_0
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -202,23 +203,23 @@ def forward_step_calc_loss(
     loss_func,
     config,
     vp_stage,
-    collect_non_loss_data,
+    collect_non_loss_data,  # False
     num_microbatches,
     forward_data_store,
     cp_group_size=None,
-    is_last_stage=None,
+    is_last_stage=None, # True
 ):
     """Calculate the loss and number of tokens for forward_step()"""
 
     from megatron.core.transformer.multi_token_prediction import MTPLossAutoScaler
 
     model_vp_stage = getattr(model, "vp_stage", None)
-    if vp_stage is not None and model_vp_stage is not None:
+    if vp_stage is not None and model_vp_stage is not None: # None, ...
         assert (
             vp_stage == model_vp_stage
         ), f"vp_stage ({vp_stage}) doesn't match model_vp_stage ({model_vp_stage})"
 
-    if cp_group_size is None and is_last_stage is None:
+    if cp_group_size is None and is_last_stage is None: # False, ...
         # fallback to parallel state
         cp_group_size = parallel_state.get_context_parallel_world_size()
         is_last_stage = parallel_state.is_pipeline_last_stage(
@@ -230,10 +231,10 @@ def forward_step_calc_loss(
         ), "cp_group_size and is_last_stage must be provided"
 
     num_tokens = torch.tensor(0, dtype=torch.int)
-    if is_last_stage:
-        if loss_func is None:
+    if is_last_stage:   # True
+        if loss_func is None:   # False
             forward_data_store.append(output_tensor)
-        elif not collect_non_loss_data:
+        elif not collect_non_loss_data: # True
             outputs = loss_func(output_tensor)
             if len(outputs) == 3:
                 output_tensor, num_tokens, loss_reduced = outputs
@@ -253,7 +254,7 @@ def forward_step_calc_loss(
             data = loss_func(output_tensor, non_loss_data=True)
             forward_data_store.append(data)
 
-    if config.timers is not None:
+    if config.timers is not None:   # True
         config.timers('forward-compute').stop()
 
     # Set the loss scale for the auxiliary loss of the MoE layer.
@@ -273,7 +274,7 @@ def forward_step_calc_loss(
             MoEAuxLossAutoScaler.set_loss_scale(loss_scale * cp_group_size / num_microbatches)
 
     # Set the loss scale for Multi-Token Prediction (MTP) loss.
-    if hasattr(config, 'mtp_num_layers') and config.mtp_num_layers is not None:
+    if hasattr(config, 'mtp_num_layers') and config.mtp_num_layers is not None: # None, ...
         # Calculate the loss scale based on the grad_scale_func if available, else default to 1.
         loss_scale = (
             config.grad_scale_func(torch.ones(1, device=output_tensor.device))
@@ -289,7 +290,7 @@ def forward_step_calc_loss(
     return output_tensor, num_tokens
 
 
-def forward_step(
+def forward_step(   # COMMON
     forward_step_func,
     data_iterator,
     model,
@@ -299,11 +300,11 @@ def forward_step(
     config,
     cp_group_size,
     collect_non_loss_data=False,
-    checkpoint_activations_microbatch=None,
+    checkpoint_activations_microbatch=None, # None
     is_first_microbatch=False,
     current_microbatch=None,
     vp_stage=None,
-    is_last_stage=True,
+    is_last_stage=True, # True
 ):
     """Forward step for passed-in model.
 
@@ -379,7 +380,7 @@ def forward_step(
     """
     from megatron.core.transformer.multi_token_prediction import MTPLossAutoScaler
 
-    if config.timers is not None:
+    if config.timers is not None:   # True
         config.timers('forward-compute', log_level=2).start()
 
     if is_first_microbatch and hasattr(model, 'set_is_first_microbatch'):
@@ -394,13 +395,15 @@ def forward_step(
 
     set_input_tensor = get_attr_wrapped_model(model, "set_input_tensor")
     set_input_tensor(input_tensor)
-
-    if config.enable_autocast:
+    # if torch.distributed.get_rank() == 0:
+    #     print(f'config: {config}', flush=True)  # TransformerConfig()
+    #     print(f'config.enable_autocast: {config.enable_autocast}', flush=True)  # False
+    if config.enable_autocast:  # False
         context_manager = torch.autocast("cuda", dtype=config.autocast_dtype)
     else:
         context_manager = contextlib.nullcontext()
     with context_manager:
-        if checkpoint_activations_microbatch is None:
+        if checkpoint_activations_microbatch is None:   # True
             output_tensor, loss_func = forward_step_func(data_iterator, model)
         else:
             output_tensor, loss_func = forward_step_func(
@@ -496,7 +499,7 @@ def check_first_val_step(first_val_step, forward_only, cond):
         return cond
 
 
-def forward_backward_no_pipelining(
+def forward_backward_no_pipelining( # COMMON
     *,
     forward_step_func,
     data_iterator: Union[Iterator, List[Iterator]],
@@ -506,14 +509,15 @@ def forward_backward_no_pipelining(
     micro_batch_size: int,  # unused
     decoder_seq_length: Optional[int] = None,  # unused
     forward_only: bool = False,
-    collect_non_loss_data: bool = False,
+    collect_non_loss_data: bool = False,    # False
     first_val_step: Optional[bool] = None,
     adjust_tensor_shapes_fn: Optional[Callable] = None,  # unused
     pg_collection: Optional[ProcessGroupCollection] = None,
 ):
     """Run forward and backward passes with no pipeline parallelism"""
-
-    if pg_collection is None:
+    # if torch.distributed.get_rank() == 0:
+    #     print(f'pg_collection: {pg_collection}', flush=True)    # None
+    if pg_collection is None:   # None
         tp_group = parallel_state.get_tensor_model_parallel_group()
         cp_group = parallel_state.get_context_parallel_group()
         embd_group = parallel_state.get_embedding_group(check_initialized=False)
@@ -561,11 +565,15 @@ def forward_backward_no_pipelining(
     ), "adjust_tensor_shapes_fn is not supported for non-pipeline-parallel schedule"
 
     config = get_model_config(model)
-    if config.timers is not None:
+    # if torch.distributed.get_rank() == 0:
+    #     print(f'config.timers: {config.timers}', flush=True)    # not None
+    if config.timers is not None:   # True
         config.timers('forward-backward', log_level=1).start(barrier=config.barrier_with_L1_time)
 
     no_sync_func = config.no_sync_func
-    if no_sync_func is None:
+    # if torch.distributed.get_rank() == 0:
+    #     print(f'config.no_sync_func: {config.no_sync_func}', flush=True)    # not None
+    if no_sync_func is None:    # False
         no_sync_func = contextlib.nullcontext
 
     model_type = get_model_type(model)
@@ -574,7 +582,7 @@ def forward_backward_no_pipelining(
     input_tensor, output_tensor_grad = None, None
     total_num_tokens = torch.zeros([], dtype=torch.int, device="cuda")
 
-    if config.overlap_moe_expert_parallel_comm and not forward_only:
+    if config.overlap_moe_expert_parallel_comm and not forward_only:    # False, ...
         forward_data_store, total_num_tokens = combined_1f1b_schedule_for_no_pipelining(
             forward_step_func,
             data_iterator,
@@ -608,7 +616,7 @@ def forward_backward_no_pipelining(
                     current_microbatch=i,
                 )
                 total_num_tokens += num_tokens
-                if not forward_only:
+                if not forward_only:    # True
                     backward_step(
                         input_tensor, output_tensor, output_tensor_grad, model_type, config
                     )
@@ -632,10 +640,11 @@ def forward_backward_no_pipelining(
 
         total_num_tokens += num_tokens
 
-        if not forward_only:
+        if not forward_only:    # True
             backward_step(input_tensor, output_tensor, output_tensor_grad, model_type, config)
-
-    if config.finalize_model_grads_func is not None and not forward_only:
+    # if torch.distributed.get_rank() == 0:
+    #     print(f'config.finalize_model_grads_func: {config.finalize_model_grads_func}', flush=True)  # not None
+    if config.finalize_model_grads_func is not None and not forward_only:   # True, True
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism and layernorm all-reduce for sequence parallelism).
         config.finalize_model_grads_func(
@@ -644,14 +653,14 @@ def forward_backward_no_pipelining(
             pg_collection=pg_collection,
         )
 
-    if config.timers is not None:
+    if config.timers is not None:   # True
         config.timers('forward-backward').stop()
 
     if (
         hasattr(config, 'cuda_graph_impl')
         and config.cuda_graph_impl == "local"
         and config.cuda_graph_scope != "full_iteration"
-    ):
+    ):  # True, False, ...
         create_cudagraphs()
 
     return forward_data_store

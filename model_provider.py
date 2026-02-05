@@ -23,7 +23,7 @@ import megatron.legacy.model  # isort: skip
 
 def model_provider(
     model_builder: Callable, pre_process=True, post_process=True, vp_stage: Optional[int] = None, config=None, pg_collection=None,
-) -> Union[GPTModel, megatron.legacy.model.GPTModel, MambaModel]:
+) -> Union[GPTModel, megatron.legacy.model.GPTModel, MambaModel]:   # COMMON
     """Builds the model.
 
     If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
