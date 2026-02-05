@@ -8,6 +8,7 @@ PARTITION=debug
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
+# Experiment Configurations
 MODEL_SCALE="small_7B" # 
 # MODEL_SCALE="800M" #
 # MODEL_SCALE="7B" #
@@ -16,6 +17,10 @@ VOCAB_SIZE=32768
 SEQ_LEN=4096
 # SEQ_LEN=$((128*1024))  # OOM
 SEQ_LEN_PER_GPU=$((64*1024))  # OOM
+CP_TYPE='cp'
+CPP_STAGES=4
+CP_TYPE='hp'
+# End
 
 case "${MODEL_SCALE}" in
     "small_7B")
@@ -63,31 +68,15 @@ case "${MODEL_SCALE}" in
         ;;
 esac
 
-# DATA_PATH=$1    # TODO
-# export HF_FORMAT_DIR=/home/yanghy/yhy/MODELS/Mamba-Codestral-7B-v0.1
-# export TOKENIZER_MODEL=$HF_FORMAT_DIR/tokenizer.model
-
 export NCCL_IB_SL=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_IB_TIMEOUT=19
 export NCCL_IB_QPS_PER_CONNECTION=4
 
-# CHECKPOINT_DIR="./checkpoints"
-# DATACACHE_DIR="./data-cache"
-
-# mkdir -p ${CHECKPOINT_DIR}
-# mkdir -p ${DATACACHE_DIR}
-
 export TRITON_CACHE_DIR="./triton-cache/"
 export TRITON_CACHE_MANAGER="megatron.core.ssm.triton_cache_manager:ParallelFileCacheManager"
 
 TRAIN_ITERS=10
-# TRAIN_SAMPLES=73242188  # 300B tokens / 4096
-# TRAIN_SAMPLES=8  # 300B tokens / 4096
-# LR_WARMUP_SAMPLES=50000
-# LR_WARMUP_SAMPLES=0
-# LR_DECAY_SAMPLES=73192188 # TRAIN_SAMPLES - LR_WARMUP_SAMPLES
-# LR_DECAY_SAMPLES=$(($TRAIN_SAMPLES-$LR_WARMUP_SAMPLES))
 
 # Slurm Args
 export WORLD_SIZE
@@ -128,6 +117,8 @@ export TRACE_NAME=${CLUSTER_NAME}_${EXP_NAME}_S${SEQ_LEN}_CP${CP}_TP${TP}
 PROFILE_ARGS=""
 # End
 options=" \
+       --context-parallel-type ${CP_TYPE} \
+       --cpp-stages ${CPP_STAGES} \
        ${PROFILE_ARGS} \
        --train-iters $TRAIN_ITERS \
        --mock-data \

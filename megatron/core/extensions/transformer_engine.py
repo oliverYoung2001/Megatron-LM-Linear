@@ -304,7 +304,7 @@ def _get_extra_te_kwargs(config: TransformerConfig):
 
 def condition_init_method(config, init_method):
     """Condition TE init_method on config.perform_initialization."""
-    return init_method if config.perform_initialization else (lambda w: None)
+    return init_method if config.perform_initialization else (lambda w: None)   # perform_initialization=True
 
 
 def split_te_layernorm_column_parallel_linear(
@@ -968,7 +968,7 @@ class TEColumnParallelLinear(TELinear):
             tp_group=tp_group,
         )
 
-        if config.use_cpu_initialization:
+        if config.use_cpu_initialization:   # None
             output_size_per_partition = divide(output_size, world_size)
             _ = _initialize_affine_weight_cpu(
                 self.weight,

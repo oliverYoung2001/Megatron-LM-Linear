@@ -60,7 +60,8 @@ class BaseMoELayer(MegatronModule, ABC):
         ep_size = utils.get_pg_size(self.ep_group)
         ep_rank = utils.get_pg_rank(self.ep_group)
         assert ep_size > 0, "Expected non-negative expert parallel size"
-
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'ep_size: {ep_size}', flush=True)    # EP
         assert self.config.num_moe_experts % ep_size == 0
         self.num_local_experts = self.config.num_moe_experts // ep_size
         local_expert_indices_offset = ep_rank * self.num_local_experts

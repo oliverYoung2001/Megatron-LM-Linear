@@ -107,7 +107,8 @@ from megatron.core.parallel_state import (
     destroy_global_memory_buffer,
     destroy_global_symmetric_memory_buffer,
     destroy_model_parallel,
-    update_pg_timeout
+    update_pg_timeout,
+    get_global_group_gloo,
 )
 
 from megatron.core.pipeline_parallel import get_forward_backward_func
@@ -628,7 +629,7 @@ def pretrain(
         store = torch.distributed.PrefixStore(str(iteration), store)
 
     # Initalize and get arguments, timers, and Tensorboard writer.
-    initialize_megatron(
+    initialize_megatron(    # COMMON
         extra_args_provider=extra_args_provider,
         args_defaults=args_defaults,
         get_embedding_ranks=get_embedding_ranks,
@@ -639,22 +640,22 @@ def pretrain(
     args = get_args()
     timers = get_timers()
 
-    if args.batch_invariant_mode:
+    if args.batch_invariant_mode:   # False
         print_rank_0("Enabling batch invariant mode globally",flush=True)
         enable_batch_invariant_mode()
 
 
-    if args.log_progress:
+    if args.log_progress:   # False
         append_to_progress_log("Starting job")
 
     # Initialize fault tolerance
     # NOTE: ft_integration functions other than `setup` are no-op if the FT is not initialized
-    if args.enable_ft_package:
+    if args.enable_ft_package:  # False
         ft_integration.setup(args)
         ft_integration.maybe_setup_simulated_fault()
 
     # Set pytorch JIT layer fusion options and warmup JIT functions.
-    set_jit_fusion_options()
+    set_jit_fusion_options()    # COMMON
 
     # Adjust the startup time so it reflects the largest value.
     # This will be closer to what scheduler will see (outside of
@@ -678,7 +679,7 @@ def pretrain(
     one_logger_utils.on_pretrain_start()
 
     # Context used for persisting some state between checkpoint saves.
-    if args.non_persistent_ckpt_type == 'local':
+    if args.non_persistent_ckpt_type == 'local':    # None
         try:
             from nvidia_resiliency_ext.checkpointing.local.ckpt_managers.local_manager import (
                 LocalCheckpointManager,
@@ -713,7 +714,7 @@ def pretrain(
 
     # Model, optimizer, and learning rate.
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
-    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
+    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(  # COMMON
         model_provider, model_type, checkpointing_context=checkpointing_context
     )
 
@@ -724,7 +725,7 @@ def pretrain(
     # Data stuff.
     app_metrics['app_build_dataiters_start_time'] = one_logger_utils.get_timestamp_in_ms()
     timers('train/valid/test-data-iterators-setup', log_level=0).start(barrier=True)
-    if args.virtual_pipeline_model_parallel_size is not None:
+    if args.virtual_pipeline_model_parallel_size is not None:   # None
         train_data_iterator = []
         valid_data_iterator = []
         test_data_iterator = []
@@ -770,23 +771,23 @@ def pretrain(
     one_logger and one_logger.log_metrics(app_metrics)
 
     wandb_writer = get_wandb_writer()
-    if wandb_writer:
+    if wandb_writer:    # None?
         # Add job name to the wandb config to make it easier to run more singleton dependency jobs.
         wandb_writer.config.update({'slurm_job_name': os.getenv("SLURM_JOB_NAME", "N/A")})
 
-    if not args.skip_train:
+    if not args.skip_train: # True
         print_rank_0('training ...')
 
-        if args.dataloader_type == 'cyclic' and args.retro_project_dir:
+        if args.dataloader_type == 'cyclic' and args.retro_project_dir: # False; 'single', ...
             assert args.retro_cyclic_train_iters is not None
             args.train_iters = args.retro_cyclic_train_iters
             print_rank_0("retro cyclic train iters : %d" % args.train_iters)
 
         iteration = 0
-        if args.do_train and args.train_iters > 0:
+        if args.do_train and args.train_iters > 0:  # True, True
             iteration, num_floating_point_operations_so_far = train(
-                forward_step_func,
-                model,
+                forward_step_func,  # COMMON
+                model,  # SPECIAL
                 optimizer,
                 opt_param_scheduler,
                 train_data_iterator,
@@ -799,7 +800,7 @@ def pretrain(
 
         print_datetime('after training is done')
 
-        if args.save and iteration != 0 and iteration % args.save_interval != 0:
+        if args.save and iteration != 0 and iteration % args.save_interval != 0:    # False, ...
             save_checkpoint(
                 iteration,
                 model,
@@ -820,7 +821,7 @@ def pretrain(
 
         iteration = args.iteration
 
-    if args.do_valid:
+    if args.do_valid:   # False?
         prefix = f'iteration {iteration} on validation set'
         if getattr(args, 'perform_rl_step', False):
             rl_utils.evaluate_and_print_results_rl(
@@ -836,7 +837,7 @@ def pretrain(
                 non_loss_data_func=non_loss_data_func
             )
 
-    if args.do_test:
+    if args.do_test:    # False?
         prefix = f'iteration {iteration} on test set'
         evaluate_and_print_results(
             prefix,
@@ -852,7 +853,7 @@ def pretrain(
         )
 
     wandb_writer = get_wandb_writer()
-    if wandb_writer:
+    if wandb_writer:    # None?
         wandb_writer.finish()
 
     ft_integration.on_checkpointing_start()
@@ -863,7 +864,7 @@ def pretrain(
         {'app_finish_time': one_logger_utils.get_timestamp_in_ms()}
     )
 
-    if getattr(args, 'perform_rl_step', False):
+    if getattr(args, 'perform_rl_step', False): # False
         rl_utils.rl_inference_interface_shutdown()
 
     ft_integration.shutdown()
@@ -1184,7 +1185,7 @@ def get_megatron_optimizer_config(args: Any) -> OptimizerConfig:
     return config, config_overrides
 
 
-def setup_model_and_optimizer(
+def setup_model_and_optimizer(  # COMMON
     model_provider_func,
     model_type,
     checkpointing_context=None,
@@ -1199,7 +1200,7 @@ def setup_model_and_optimizer(
     unwrapped_model = unwrap_model(model)
 
     one_logger and one_logger.log_metrics({"app_build_optimzer_start_time": one_logger_utils.get_timestamp_in_ms()})
-    if args.skip_train:
+    if args.skip_train: # False
         optimizer, opt_param_scheduler = None, None
     else:
         config, config_overrides = get_megatron_optimizer_config(args)
@@ -1218,7 +1219,7 @@ def setup_model_and_optimizer(
         opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
     one_logger and one_logger.log_metrics({"app_build_optimzer_finish_time": one_logger_utils.get_timestamp_in_ms()})
 
-    if args.moe_use_upcycling:
+    if args.moe_use_upcycling:  # False
         torch.distributed.barrier()
         assert not checkpoint_exists(args.save), (
             "The upcycling destination directory already exists. "
@@ -1267,7 +1268,7 @@ def setup_model_and_optimizer(
 
     if (
         args.load is not None or args.pretrained_checkpoint is not None
-    ) and not args.moe_use_upcycling:
+    ) and not args.moe_use_upcycling:   # False; (None, None), ...
         one_logger and one_logger.log_metrics(
             {'load_checkpoint_start_time': one_logger_utils.get_timestamp_in_ms()}
         )
@@ -1299,14 +1300,14 @@ def setup_model_and_optimizer(
         args.iteration == 0
         and len(unwrapped_model) == 1
         and hasattr(unwrapped_model[0], 'init_state_dict_from_bert')
-    ):
+    ):  # False
         print_rank_0("Initializing ICT from pretrained BERT model")
         unwrapped_model[0].init_state_dict_from_bert()
         if args.fp16:
             optimizer.reload_model_params()
 
     # Convert checkpoint format.
-    if args.ckpt_convert_format is not None:
+    if args.ckpt_convert_format is not None:    # None
         load_ckpt_format = args.ckpt_format
         args.ckpt_format = args.ckpt_convert_format
         args.save = os.path.join(args.ckpt_convert_save, args.ckpt_convert_format)
@@ -1339,7 +1340,7 @@ def dummy_train_step(data_iterator):
             batch = get_batch_on_this_cp_rank(batch)
 
 
-def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_scheduler, config, forward_backward_func):
+def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_scheduler, config, forward_backward_func): # COMMON
     """Single training step."""
     args = get_args()
     timers = get_timers()
@@ -1351,7 +1352,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
             model_chunk.zero_grad_buffer()
         optimizer.zero_grad()
 
-        if has_nvidia_modelopt:
+        if has_nvidia_modelopt: # False
             # [ModelOpt]: Pipeline-parallel Distillation stacks student and teacher tensors
             adjust_tensor_shapes_fn = get_tensor_shapes_adjust_fn_for_distillation(
                 model,
@@ -1365,13 +1366,13 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
         # For the mxfp8_param with reuse_grad_buf_for_mxfp8_param_ag and dp_ag_overlap,
         # we need to call the _copy_main_params_to_param_buffer() after the grad buffer
         # is zeroed by zero_grad_buffer() because param and grad buffer are shared.
-        if args.reuse_grad_buf_for_mxfp8_param_ag and args.overlap_param_gather:
+        if args.reuse_grad_buf_for_mxfp8_param_ag and args.overlap_param_gather:    # False, True
             for optim_instance in optimizer.chained_optimizers:
                 if isinstance(optim_instance, DistributedOptimizer):
                     optim_instance._copy_main_params_to_param_buffer()
 
         # Forward pass.
-        losses_reduced = forward_backward_func(
+        losses_reduced = forward_backward_func( # COMMON
             forward_step_func=forward_step_func,
             data_iterator=data_iterator,
             model=model,
@@ -1387,11 +1388,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
         return {}, True, should_checkpoint, should_exit, exit_code, None, None, 0
 
     # Empty unused memory.
-    if args.empty_unused_memory_level >= 1:
+    if args.empty_unused_memory_level >= 1: # 0
         torch.cuda.empty_cache()
 
     # Vision gradients.
-    if args.vision_pretraining and args.vision_pretraining_type == "dino":
+    if args.vision_pretraining and args.vision_pretraining_type == "dino":  # False, ...
         unwrapped_model = unwrap_model(model[0])
         unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
 
@@ -1403,7 +1404,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
     # get max attention logit for logging and run clip_qk()
     # Part of MuonClip Optimizer step
     log_max_attention_logit = 0
-    if args.qk_clip or args.log_max_attention_logit:
+    if args.qk_clip or args.log_max_attention_logit:    # False, False
         log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
             
     timers('optimizer').stop()
@@ -1414,11 +1415,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
     # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
     # so we must gather across mp ranks
     grad_norm = reduce_max_stat_across_model_parallel_group(grad_norm)
-    if args.log_num_zeros_in_grad:
+    if args.log_num_zeros_in_grad:  # False
         num_zeros_in_grad = reduce_max_stat_across_model_parallel_group(num_zeros_in_grad)
 
     # Vision momentum.
-    if args.vision_pretraining and args.vision_pretraining_type == "dino":
+    if args.vision_pretraining and args.vision_pretraining_type == "dino":  # False, ...
         unwrapped_model = unwrap_model(model[0])
         unwrapped_model.update_momentum(args.curr_iteration)
 
@@ -1431,7 +1432,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
         skipped_iter = 1
 
     # Empty unused memory.
-    if args.empty_unused_memory_level >= 2:
+    if args.empty_unused_memory_level >= 2: # 0
         torch.cuda.empty_cache()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
@@ -1441,7 +1442,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
         for key in losses_reduced[0].keys():
             val = [x[key].view(-1) for x in losses_reduced]
             if val[0].numel() == 2:
-                if args.sft:
+                if args.sft:    # False
                     # in mcore the normalization happens on micro batch instead of global
                     val = torch.vstack(val)
                     val = val[:, 0] / val[:, 1]
@@ -2085,11 +2086,11 @@ def train(
     args = get_args()
     timers = get_timers()
 
-    if getattr(args, 'perform_rl_step', False):
+    if getattr(args, 'perform_rl_step', False): # False
         assert has_rl_utils, "RL cannot run without the megatron.rl package"
 
     # Additional variable initialization for RL training
-    if getattr(args, 'perform_rl_step', False):
+    if getattr(args, 'perform_rl_step', False): # False
         print_rank_0("> Loading pretrained checkpoint for reference weights in RL training...")
         load, finetune, no_load_optim = args.load, args.finetune, args.no_load_optim
         args.no_load_optim = True
@@ -2125,7 +2126,7 @@ def train(
         args.no_load_optim = no_load_optim
 
     # IMPORTANT FIX: For RL training, reinitialize the microbatch calculator with the correct configuration
-    if getattr(args, 'perform_rl_step', False):
+    if getattr(args, 'perform_rl_step', False): # False
         print_rank_0("> Reinitializing microbatch calculator for GRPO training...")
         from megatron.core.num_microbatches_calculator import (
             destroy_num_microbatches_calculator,
@@ -2147,7 +2148,7 @@ def train(
     energy_monitor = get_energy_monitor()
     one_logger = get_one_logger()
 
-    if args.run_workload_inspector_server:
+    if args.run_workload_inspector_server:  # False
         try:
             from workload_inspector.utils.webserver import run_server
             import threading
@@ -2172,9 +2173,9 @@ def train(
     iteration = args.iteration
     # Make sure rerun_state_machine has the right iteration loaded from checkpoint.
     rerun_state_machine = get_rerun_state_machine()
-    if rerun_state_machine.current_iteration != iteration:
+    if rerun_state_machine.current_iteration != iteration:  # True
         print_rank_0(f"Overwriting rerun_state_machine.current_iteration from "
-                     f"{rerun_state_machine.current_iteration} to {iteration}...")
+                     f"{rerun_state_machine.current_iteration} to {iteration}...")  # from -1 to 0
         rerun_state_machine.current_iteration = iteration
 
     # Track E2E metrics at the start of training.
@@ -2195,7 +2196,8 @@ def train(
     # Setup some training config params.
     config.grad_scale_func = optimizer.scale_loss
     config.timers = timers
-    if isinstance(model[0], (megatron_FSDP, DDP)) and args.overlap_grad_reduce:
+    print_rank_0(f'isinstance(model[0], (megatron_FSDP, DDP)): {isinstance(model[0], (megatron_FSDP, DDP))}, {type(model[0])}')
+    if isinstance(model[0], (megatron_FSDP, DDP)) and args.overlap_grad_reduce: # TODO, True
         assert config.no_sync_func is None, (
             'When overlap_grad_reduce is True, config.no_sync_func must be None; '
             'a custom no_sync_func is not supported when overlapping grad-reduce'
@@ -2207,13 +2209,13 @@ def train(
             config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
             if len(model) == 1:
                 config.grad_sync_func = config.grad_sync_func[0]
-    if args.overlap_param_gather and args.align_param_gather:
+    if args.overlap_param_gather and args.align_param_gather:   # True, False
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
             config.param_sync_func = config.param_sync_func[0]
     config.finalize_model_grads_func = finalize_model_grads
 
-    if args.log_energy:
+    if args.log_energy: # False
         energy_monitor.setup()
         energy_monitor.resume()
 
@@ -2224,7 +2226,7 @@ def train(
     should_exit = False
     exit_code = 0
 
-    if args.manual_gc:
+    if args.manual_gc:  # False
         # Disable the default garbage collector and perform the collection manually.
         # This is to align the timing of garbage collection across ranks.
         assert (
@@ -2234,7 +2236,7 @@ def train(
         gc.collect()
 
     # Singleton initialization of straggler detector.
-    if args.log_straggler:
+    if args.log_straggler:  # False
         global stimer
         world = torch.distributed.get_world_size()
         rank = torch.distributed.get_rank()
@@ -2252,8 +2254,8 @@ def train(
     eval_duration = 0.0
     eval_iterations = 0
     # Wrap forward_backward_func for Full iteration CUDA graph
-    forward_backward_func = get_forward_backward_func()
-    if args.cuda_graph_impl == "local" and args.cuda_graph_scope=="full_iteration":
+    forward_backward_func = get_forward_backward_func() # COMMON
+    if args.cuda_graph_impl == "local" and args.cuda_graph_scope=="full_iteration": # None, ...
         forward_backward_func = FullCudaGraphWrapper(forward_backward_func, cuda_graph_warmup_steps=args.cuda_graph_warmup_steps)
 
     def get_e2e_base_metrics():
@@ -2274,19 +2276,31 @@ def train(
         }
 
     # Cache into one-logger for callback.
-    if one_logger:
+    if one_logger:  # None?
         with one_logger.get_context_manager():
             one_logger.store_set('get_e2e_base_metrics', get_e2e_base_metrics)
 
     prof = None
     nsys_nvtx_context = None # reference to context for nsys profiling, so it can be cleaned up
+    if args.profile and args.use_pytorch_profiler and len(args.profile_ranks) > 0:
+        # [NOTE]: Modified by yhy
+        TRACE_NAME = os.environ["TRACE_NAME"]
+        tb_dir_list = [None]
+        if torch.distributed.get_rank() == 0:
+            TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+            tb_dir = f'{args.tensorboard_dir}/{TRACE_NAME}_{TIMESTAMP}'
+            os.makedirs(tb_dir, exist_ok=True)
+            tb_dir_list[0] = tb_dir
+        # Broadcast tb_dir
+        torch.distributed.broadcast_object_list(tb_dir_list, src=0, group=get_global_group_gloo())
+        tb_dir = tb_dir_list[0]
+
     if (
         args.profile
         and torch.distributed.get_rank() in args.profile_ranks
         and args.use_pytorch_profiler
     ):
         # [NOTE]: Modified by yhy
-        TRACE_NAME = f'{os.environ["TRACE_NAME"]}_w{torch.distributed.get_world_size()}_r{torch.distributed.get_rank()}'
         prof = torch.profiler.profile(
             schedule=torch.profiler.schedule(
                 wait=max(args.profile_step_start - 1, 0),
@@ -2295,8 +2309,8 @@ def train(
                 repeat=1,
             ),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                dir_name=f'{args.tensorboard_dir}', 
-                worker_name=TRACE_NAME,
+                dir_name=tb_dir, 
+                worker_name=f'{TRACE_NAME}_w{torch.distributed.get_world_size()}_r{torch.distributed.get_rank()}',
             ),
             record_shapes=True,
             with_stack=True,
@@ -2307,7 +2321,7 @@ def train(
     # Disable forward pre-hook to start training to ensure that errors in checkpoint loading
     # or random initialization don't propagate to all ranks in first all-gather (which is a
     # no-op if things work correctly).
-    if should_disable_forward_pre_hook(args):
+    if should_disable_forward_pre_hook(args):   # True
         disable_forward_pre_hook(model, param_sync=False)
         # Also remove param_sync_func temporarily so that sync calls made in
         # `forward_backward_func` are no-ops.
@@ -2315,7 +2329,7 @@ def train(
         config.param_sync_func = None
         pre_hook_enabled = False
     # Also, check weight hash across DP replicas to be very pedantic.
-    if args.check_weight_hash_across_dp_replicas_interval is not None:
+    if args.check_weight_hash_across_dp_replicas_interval is not None:  # None
         assert check_param_hashes_across_dp_replicas(
             model, cross_check=True
         ), "Parameter hashes not matching across DP replicas"
@@ -2323,7 +2337,7 @@ def train(
         print_rank_0(f">>> Weight hashes match after {iteration} iterations...")
 
     # Initialize CUDA Graphs helper.
-    if args.cuda_graph_impl == "transformer_engine":
+    if args.cuda_graph_impl == "transformer_engine":    # None
         cuda_graph_helper = TECudaGraphHelper(
             model=model,
             config=config,
@@ -2349,7 +2363,7 @@ def train(
         # Update the timeout for all process groups after initialization
         # We update the timeout after the first successful iteration,
         # which takes longer than others usually
-        if args.distributed_timeout_seconds_after_init is not None and iteration == start_iteration+1:
+        if args.distributed_timeout_seconds_after_init is not None and iteration == start_iteration+1:  # None, ...
             # TODO: some dynamic timeout setting is required
             # based on the iteration time considering interval-based steps (e.g. eval, checkpoint)
             # e.g. timeout for normal iterations vs timeout for iterations with checkpoint
@@ -2365,7 +2379,7 @@ def train(
         # Skip automatic checkpoint on microbatch changes when sequence packing is active
         # as it intentionally reconfigures microbatches
         if get_num_microbatches() != num_microbatches and iteration != 0:
-            if args.rl_use_sequence_packing:
+            if args.rl_use_sequence_packing:    # False
                 print_rank_0(
                     f"[Sequence Packing] Skipping automatic checkpoint at iteration {iteration} "
                     f"(microbatch change: {num_microbatches} -> {get_num_microbatches()})"
@@ -2375,7 +2389,7 @@ def train(
                     f"Number of microbatches should be increasing due to batch size rampup; "
                     f"instead going from {num_microbatches} to {get_num_microbatches()}"
                 )
-                if args.save is not None:
+                if args.save is not None:   # None
                     save_checkpoint_and_time(
                         iteration,
                         model,
@@ -2392,7 +2406,7 @@ def train(
         if (
             args.cuda_graph_impl == "transformer_engine"
             and iteration == args.cuda_graph_warmup_steps
-        ):
+        ):  # None, ...
             if iteration > start_iteration and should_disable_forward_pre_hook(args):
                 disable_forward_pre_hook(model, param_sync=False)
             cuda_graph_helper.create_cudagraphs()
@@ -2401,7 +2415,7 @@ def train(
                 cuda_graph_helper.cuda_graph_set_manual_hooks()
 
         # Completely skip iteration if needed.
-        if iteration in args.iterations_to_skip:
+        if iteration in args.iterations_to_skip:    # []
             # Dummy train_step to fast forward train_data_iterator.
             dummy_train_step(train_data_iterator)
             if iteration == start_iteration:
@@ -2418,7 +2432,7 @@ def train(
         # For GRPO, we keep the data for a few epochs. DeepSeekMath paper calls this number $\mu$.
         # It is similar to a PPO epoch.
 
-        if getattr(args, 'perform_rl_step', False):
+        if getattr(args, 'perform_rl_step', False): # False
             with torch.no_grad():
                 train_data_iterator = rl_utils.setup_grpo_data_iterator(
                     model, optimizer, iteration, ref_state_dict, buffered_rollouts
@@ -2441,7 +2455,7 @@ def train(
             forward_step_func, train_data_iterator, model, optimizer, opt_param_scheduler, config, forward_backward_func
         )
         ft_integration.on_training_step_end()
-        if should_checkpoint:
+        if should_checkpoint:   # False
             save_checkpoint_and_time(
                 iteration,
                 model,
@@ -2480,7 +2494,7 @@ def train(
 
         iteration += 1
 
-        if getattr(args, 'perform_rl_step', False) and args.rl_use_sequence_packing:
+        if getattr(args, 'perform_rl_step', False) and args.rl_use_sequence_packing:    # False, ...
             iteration_sequences = rl_utils.get_iteration_sequence_count(args)
             # Track bins separately for packed mode
             rl_utils.update_sequence_packing_metrics(args)
@@ -2499,7 +2513,7 @@ def train(
         num_skipped_samples_in_batch = (
             get_current_global_batch_size() - get_current_running_global_batch_size()
         )
-        if args.decrease_batch_size_if_needed:
+        if args.decrease_batch_size_if_needed:  # False
             assert num_skipped_samples_in_batch >= 0
         else:
             assert num_skipped_samples_in_batch == 0
@@ -2515,7 +2529,7 @@ def train(
             loss_scale = 1.0
         params_norm = None
 
-        if args.log_params_norm:
+        if args.log_params_norm:    # False
             params_norm = calc_params_l2_norm(model)
         learning_rate = None
         for param_group in optimizer.param_groups:
@@ -2538,7 +2552,7 @@ def train(
         )
 
         # Evaluation.
-        if args.eval_interval and iteration % args.eval_interval == 0 and args.do_valid:
+        if args.eval_interval and iteration % args.eval_interval == 0 and args.do_valid:    # ..., ..., False
             if args.log_energy:
                 energy_monitor.pause()
             timers('interval-time').stop()
@@ -2609,7 +2623,7 @@ def train(
         writer.flush()
 
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
-    if pre_hook_enabled:
+    if pre_hook_enabled:    # False
         disable_forward_pre_hook(model)
 
     ft_integration.on_checkpointing_start()
@@ -2617,10 +2631,10 @@ def train(
     # a persistent async worker if persistent ckpt worker is enabled
     maybe_finalize_async_save(blocking=True, terminate=True)
     ft_integration.on_checkpointing_end(is_async_finalization=True)
-    if args.enable_ft_package and ft_integration.get_rank_monitor_client() is not None:
+    if args.enable_ft_package and ft_integration.get_rank_monitor_client() is not None: # False, ...
         ft_integration.get_rank_monitor_client().shutdown_workload_monitoring()
 
-    if args.log_energy:
+    if args.log_energy: # False
         energy_monitor.lap()
         total_energy = energy_monitor.get_total()
         print_rank_0(f"Total training energy (GPU): {total_energy / 1e6} MJ")
@@ -3083,6 +3097,6 @@ def build_train_valid_test_data_iterators(build_train_valid_test_datasets_provid
     return train_data_iterator, valid_data_iterators, test_data_iterator
 
 
-def should_disable_forward_pre_hook(args):
+def should_disable_forward_pre_hook(args):  # True
     """Block forward pre-hook for certain configurations."""
-    return not args.use_megatron_fsdp and args.use_distributed_optimizer and args.overlap_param_gather
+    return not args.use_megatron_fsdp and args.use_distributed_optimizer and args.overlap_param_gather  # True, True, True

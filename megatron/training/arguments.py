@@ -1308,10 +1308,10 @@ def core_transformer_config_from_args(args, config_class=None):
     # Config class.
     config_class = config_class or TransformerConfig
 
-    if args.multi_latent_attention:
+    if args.multi_latent_attention: # False
         config_class = MLATransformerConfig
 
-    if args.heterogeneous_layers_config_path is not None:
+    if args.heterogeneous_layers_config_path is not None:   # None
         assert not args.multi_latent_attention, "Multi latent attention with heterogeneous layers is not supported."
         config_class = HeterogeneousTransformerConfig
 
@@ -2759,6 +2759,10 @@ def _add_distributed_args(parser):
     group.add_argument('--torch-fsdp2-no-reshard-after-forward', action='store_false', dest='torch_fsdp2_reshard_after_forward',
                        help='Whether to reshard weights after forward pass when using PyTorch FSDP2. '
                        'Set to enable FSDP ZeRO-2.')
+    group.add_argument('--context-parallel-type', type=str, default='cp', choices=['cp', 'hp'],
+                       help='Type of context parallelism: cp or hp')
+    group.add_argument('--cpp-stages', type=int, default=1,
+                       help='Degree of context pipeline parallelism.')
     group.add_argument('--context-parallel-size', type=int, default=1,
                        help='Degree of context parallelism.')
     group.add_argument('--cp-comm-type', nargs='+', type=str, default=["p2p"],

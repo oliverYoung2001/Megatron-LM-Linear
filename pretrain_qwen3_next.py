@@ -6,12 +6,14 @@ from typing import List, Optional, Tuple
 
 import torch
 
-from mamba_builders import mamba_builder
+# from mamba_builders import mamba_builder
+from qwen3_next_builders import qwen3_next_builder
 from megatron.core import mpu
 from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
 from megatron.core.datasets.gpt_dataset import GPTDataset, GPTDatasetConfig, MockGPTDataset
 from megatron.core.enums import ModelType
-from megatron.core.models.mamba import MambaModel
+# from megatron.core.models.mamba import MambaModel
+from megatron.core.models.qwen3_next import Qwen3NextModel
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.tokenizers.text.utils.build_tokenizer import build_tokenizer
 from megatron.core.utils import StragglerDetector, get_attr_wrapped_model
@@ -23,7 +25,7 @@ from megatron.training.utils import (
     get_blend_and_blend_per_split,
     is_first_or_last_pipeline_stage,
 )
-from model_provider import model_provider
+from model_provider import model_provider   # COMMON
 
 try:
     from megatron.post_training.arguments import add_modelopt_args
@@ -54,7 +56,7 @@ def get_batch(data_iterator, vp_stage=None):
 # define spiky loss as a loss that's 10x the max loss observed
 SPIKY_LOSS_FACTOR = 10
 
-def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor, model: Optional[MambaModel] = None):    # COMMON
+def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor, model: Optional[Qwen3NextModel] = None):    # COMMON
     """Loss function.
 
     Args:
@@ -112,12 +114,12 @@ def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor, model: Optio
     return loss, num_tokens, report
 
 
-def forward_step(data_iterator, model: MambaModel): # COMMON
+def forward_step(data_iterator, model: Qwen3NextModel): # COMMON
     """Forward training step.
 
     Args:
         data_iterator : Input data iterator
-        model (MambaModel): The GPT Model
+        model (Qwen3NextModel): The GPT Model
     """
     timers = get_timers()
 
@@ -202,10 +204,10 @@ def train_valid_test_datasets_provider(train_val_test_num_samples, vp_stage=None
     )
     # End
 
-    if args.sft:    # False
+    if args.sft:
         dataset_type = SFTDataset
     else:
-        if args.mock_data:  # True
+        if args.mock_data:
             dataset_type = MockGPTDataset
         else:
             dataset_type = GPTDataset
@@ -233,7 +235,7 @@ if __name__ == "__main__":
     pretrain, store = inprocess_restart.maybe_wrap_for_inprocess_restart(pretrain)
 
     pretrain(train_valid_test_datasets_provider,
-             partial(model_provider, mamba_builder),
+             partial(model_provider, qwen3_next_builder),
              ModelType.encoder_or_decoder,
              forward_step,
              args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
