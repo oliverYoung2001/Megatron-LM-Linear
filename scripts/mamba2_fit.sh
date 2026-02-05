@@ -1,6 +1,11 @@
 #!/bin/bash
 
-# Use: ./train.sh <data-path> <tokenizer-path>
+# Cluster Args
+CLUSTER_NAME="fit"
+PARTITION=h01
+# NODES="g46"
+# End
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 MODEL_SCALE="small_7B" # 
@@ -8,13 +13,18 @@ MODEL_SCALE="small_7B" #
 # MODEL_SCALE="7B" #
 HYBRID_ATTENTION_RATIO=0
 VOCAB_SIZE=32768
+SEQ_LEN=4096
+# SEQ_LEN=$((128*1024))  # OOM
+SEQ_LEN_PER_GPU=$((64*1024))  # OOM
 
 case "${MODEL_SCALE}" in
     "small_7B")
         WORLD_SIZE=1
         WORLD_SIZE=2
         WORLD_SIZE=8
-        TENSOR_MODEL_PARALLEL_SIZE=$WORLD_SIZE
+        TP=1
+        CP=$WORLD_SIZE
+        SEQ_LEN=$(($SEQ_LEN_PER_GPU * $WORLD_SIZE))
         NUM_LAYERS=4
         HIDDEN_SIZE=4096
         NUM_ATTENTION_HEADS=128 # Hqk=8, Nv=128; dk=128, dv=64
@@ -71,9 +81,6 @@ export NCCL_IB_QPS_PER_CONNECTION=4
 export TRITON_CACHE_DIR="./triton-cache/"
 export TRITON_CACHE_MANAGER="megatron.core.ssm.triton_cache_manager:ParallelFileCacheManager"
 
-SEQ_LEN=4096
-# SEQ_LEN=$((128*1024))  # OOM
-SEQ_LEN=$((64*1024))  # OOM
 TRAIN_ITERS=10
 # TRAIN_SAMPLES=73242188  # 300B tokens / 4096
 # TRAIN_SAMPLES=8  # 300B tokens / 4096
@@ -83,10 +90,7 @@ TRAIN_ITERS=10
 # LR_DECAY_SAMPLES=$(($TRAIN_SAMPLES-$LR_WARMUP_SAMPLES))
 
 # Slurm Args
-CLUSTER_NAME="fit"
 export WORLD_SIZE
-PARTITION=h01
-# NODES="g46"
 if [[ $WORLD_SIZE -le 8 ]]; then
     NNODES=1
     NPROC_PER_NODE=${WORLD_SIZE}
@@ -119,7 +123,7 @@ PROFILE_ARGS=" \
 "
 TENSORBOARD_DIR="./logs/tb"
 mkdir -p ${TENSORBOARD_DIR}
-export TRACE_NAME=${CLUSTER_NAME}_${EXP_NAME}_S${SEQ_LEN}
+export TRACE_NAME=${CLUSTER_NAME}_${EXP_NAME}_S${SEQ_LEN}_CP${CP}_TP${TP}
 
 # PROFILE_ARGS=""
 # End
@@ -128,7 +132,8 @@ options=" \
        --train-iters $TRAIN_ITERS \
        --mock-data \
        --no-gradient-accumulation-fusion \
-       --tensor-model-parallel-size ${TENSOR_MODEL_PARALLEL_SIZE} \
+       --context-parallel-size ${CP} \
+       --tensor-model-parallel-size ${TP} \
        --sequence-parallel \
        --pipeline-model-parallel-size 1 \
        --use-distributed-optimizer \

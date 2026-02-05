@@ -1,6 +1,11 @@
 #!/bin/bash
 
-# Use: ./train.sh <data-path> <tokenizer-path>
+# Cluster Args
+CLUSTER_NAME="qc"
+PARTITION=debug
+# NODES="bjdb-h20-node-020"
+# End
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 MODEL_SCALE="small_7B" # 
@@ -85,10 +90,7 @@ TRAIN_ITERS=10
 # LR_DECAY_SAMPLES=$(($TRAIN_SAMPLES-$LR_WARMUP_SAMPLES))
 
 # Slurm Args
-CLUSTER_NAME="qc"
 export WORLD_SIZE
-PARTITION=debug
-# NODES="bjdb-h20-node-020"
 if [[ $WORLD_SIZE -le 8 ]]; then
     NNODES=1
     NPROC_PER_NODE=${WORLD_SIZE}
