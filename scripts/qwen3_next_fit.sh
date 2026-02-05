@@ -18,26 +18,6 @@ CPP_STAGES=4
 CP_TYPE='hp'
 # End
 
-# TODO
-    # gdn_hqk: int = 16
-    # gdn_hv: int = 32
-    # gdn_dk: int = 128
-    # gdn_dv: int = 128
-    # linear_conv_kernel_dim: int = 4
-    # modify '--spec' and inject 'hybrid_override_pattern'
-
-
-    # --num-experts 128 \
-    # --moe-ffn-hidden-size 768 \
-    # --moe-router-topk 8 \
-    # --moe-router-dtype fp32 \
-    # --moe-aux-loss-coeff 1e-3 \
-    # --moe-token-dispatcher-type alltoall \
-    # --moe-router-load-balancing-type aux_loss \
-    # --moe-shared-expert-intermediate-size
-    # --expert-model-parallel-size
-    # --expert-tensor-parallel-size
-
 case "${MODEL_CONFIG}" in
     "small")
         WORLD_SIZE=1
@@ -101,9 +81,9 @@ export TRITON_CACHE_MANAGER="megatron.core.ssm.triton_cache_manager:ParallelFile
 TRAIN_ITERS=10
 
 # Slurm Args
-CLUSTER_NAME="qc"
+CLUSTER_NAME="fit"
 export WORLD_SIZE
-PARTITION=debug
+PARTITION=h01
 # NODES="bjdb-h20-node-020"
 if [[ $WORLD_SIZE -le 8 ]]; then
     NNODES=1
